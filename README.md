@@ -48,3 +48,32 @@ elapsed time dropped from 113 ms to 6 ms.
 removed most of the `order_items` reads but left `orders` scanning in full, so both sides needed an index.
 
 Script: [`queries/02_missing_fk_indexes.sql`](queries/02_missing_fk_indexes.sql)
+
+
+## Query 03: Scalar UDF vs inline table-valued function
+
+**Problem:** Classifying all 500,000 orders into size bands with a scalar user-defined
+function means SQL Server calls the function once per row. Queries that call a non-inlined scalar
+UDF also can't use parallelism, and `STATISTICS IO` doesn't report the cost, so the problem is
+easy to miss.
+
+**Fix:** Rewrite the logic as an inline table-valued function and call it with `CROSS APPLY`.
+The optimizer expands it into the main query like a view.
+
+| Version | Logical reads (`orders`) | CPU | Elapsed |
+|---|---|---|---|
+| Before (scalar UDF, `INLINE = OFF`) | 2,853 | 1,793 ms | 2,056 ms |
+| After (inline TVF + `CROSS APPLY`) | 2,853 | 73 ms | 77 ms |
+| Bonus: scalar UDF with auto-inlining (SQL Server 2019+) | 2,853 | 159 ms | 160 ms |
+
+**Improvement:** 96.3% lower elapsed time (2,056 → 77 ms, about 27× faster) with identical results
+(verified: 0 mismatches between the scalar and inline versions).
+
+**Takeaways:**
+- Logical reads were identical in all three versions, so reads alone would have hidden the problem.
+  Always compare CPU and elapsed time too.
+- SQL Server 2019+ can inline simple scalar UDFs automatically, which helped a lot (2,056 → 160 ms),
+  but it only applies to functions that meet certain restrictions, and here it was still slower than
+  the explicit inline TVF. Writing the function as an inline TVF doesn't depend on that feature.
+
+Script: [`queries/03_scalar_udf_vs_inline_tvf.sql`](queries/03_scalar_udf_vs_inline_tvf.sql)
