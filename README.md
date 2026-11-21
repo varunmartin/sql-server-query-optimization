@@ -28,22 +28,23 @@ Script: [`queries/01_non_sargable_date_filter.sql`](queries/01_non_sargable_date
 
 **Problem:** Fetching one customer's orders with their line items and product names joins
 `orders` to `order_items`. Neither `orders.customer_id` nor `order_items.order_id` was indexed
-(SQL Server doesn't index foreign keys automatically), so the query scanned 500,000 order rows
-and 1.5 million line-item rows to return 30 rows.
+(SQL Server doesn't index foreign keys automatically), so the query scanned the full 500,000-row
+`orders` table and the full 1.5M-row `order_items` table to return just 30 rows.
 
-**Fix:** Add covering nonclustered indexes on both join/filter columns:
+**Fix:** Add covering nonclustered indexes on both the filter and join columns:
 - `IX_orders_customer_id` on `orders(customer_id)` including `order_date`
 - `IX_order_items_order_id` on `order_items(order_id)` including `product_id, quantity, unit_price`
 
-| Version | Plan | Total logical reads | Elapsed |
-|---|---|---|---|
-| Before (no FK indexes) | Scan + Scan, hash join | ___ | ___ ms |
-| Only `order_items` indexed | Scan on orders, Seek on order_items | ___ | ___ ms |
-| After (both indexed) | Seek + Seek, nested loops | ___ | ___ ms |
+| Version | `orders` reads | `order_items` reads | Total logical reads | CPU | Elapsed |
+|---|---|---|---|---|---|
+| Before (no FK indexes) | 2,996 | 7,203 | 10,259 | 405 ms | 113 ms |
+| Only `order_items` indexed | 2,853 | 30 | 2,896 | 42 ms | 47 ms |
+| After (both indexed) | 3 | 30 | 46 | 5 ms | 6 ms |
 
-**Improvement:** ___% fewer logical reads for the same 30 rows.
+**Improvement:** 99.6% fewer logical reads (10,259 → 46) for the same 30 rows, and
+elapsed time dropped from 113 ms to 6 ms.
 
-**Takeaway:** Index the columns you filter and join on. Fixing one side of a join leaves the
-other side scanning.
+**Takeaway:** Index the columns you filter and join on. Fixing only one side of a join (second row)
+removed most of the `order_items` reads but left `orders` scanning in full, so both sides needed an index.
 
 Script: [`queries/02_missing_fk_indexes.sql`](queries/02_missing_fk_indexes.sql)
